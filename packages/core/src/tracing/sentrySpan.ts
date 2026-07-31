@@ -35,6 +35,7 @@ import {
   getSpanDescendants,
   getStatusMessage,
   getStreamedSpanLinks,
+  sealChildSpansOnSpan,
   spanTimeInputToSeconds,
   spanToJSON,
   spanToTransactionTraceContext,
@@ -469,6 +470,11 @@ export class SentrySpan implements Span {
       options.onSpanCaptured?.(descendant);
       spans.push(spanJSON);
     }
+
+    // This was the last read of the tree: the event below is assembled from `spans`, and a child that
+    // starts later is re-emitted on its own instead of from here. Tracking those children would retain
+    // them for as long as this span is, which for a segment span pinned in an async context is forever.
+    sealChildSpansOnSpan(this);
 
     const source = this._attributes[SEMANTIC_ATTRIBUTE_SENTRY_SOURCE];
 

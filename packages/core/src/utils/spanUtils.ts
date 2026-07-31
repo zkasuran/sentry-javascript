@@ -360,10 +360,16 @@ export function addStatusMessageAttribute(
 }
 
 const CHILD_SPANS_FIELD = '_sentryChildSpans';
+const CHILD_SPANS_SEALED_FIELD = '_sentryChildSpansSealed';
 const ROOT_SPAN_FIELD = '_sentryRootSpan';
+
+// Matches the truncation applied when a segment span is serialized (`MAX_SPAN_COUNT` in
+// `sentrySpan.ts`), so the children we refuse to track are ones that would be dropped at send time.
+const MAX_CHILD_SPANS = 1000;
 
 type SpanWithPotentialChildren = Span & {
   [CHILD_SPANS_FIELD]?: Set<Span>;
+  [CHILD_SPANS_SEALED_FIELD]?: boolean;
   [ROOT_SPAN_FIELD]?: Span;
 };
 
@@ -376,13 +382,32 @@ export function addChildSpanToSpan(span: SpanWithPotentialChildren, childSpan: S
   const rootSpan = span[ROOT_SPAN_FIELD] || span;
   addNonEnumerableProperty(childSpan, ROOT_SPAN_FIELD, rootSpan);
 
+  // `getSpanDescendants()` stops at an unsampled span, and a sealed span has already had its tree read
+  // for the last time, so a child added here could never show up in a transaction. Skipping it keeps a
+  // span that outlives its children (e.g. a framework boot span still active in a queue consumer's
+  // async context) from pinning every later child for the rest of the process.
+  if (!spanIsSampled(span) || span[CHILD_SPANS_SEALED_FIELD]) {
+    return;
+  }
+
   // We store a list of child spans on the parent span
   // We need this for `getSpanDescendants()` to work
-  if (span[CHILD_SPANS_FIELD]) {
-    span[CHILD_SPANS_FIELD].add(childSpan);
-  } else {
+  const childSpans = span[CHILD_SPANS_FIELD];
+  if (!childSpans) {
     addNonEnumerableProperty(span, CHILD_SPANS_FIELD, new Set([childSpan]));
+  } else if (childSpans.size < MAX_CHILD_SPANS) {
+    childSpans.add(childSpan);
   }
+}
+
+/**
+ * Stops tracking further children on a span once its tree has been read for the last time. The children
+ * it already has are kept, so the tree stays what was sent. A child that starts afterwards is still
+ * reachable through its own root span reference, which is what re-emitting it as an orphan transaction
+ * relies on.
+ */
+export function sealChildSpansOnSpan(span: SpanWithPotentialChildren): void {
+  addNonEnumerableProperty(span, CHILD_SPANS_SEALED_FIELD, true);
 }
 
 /** This is only used internally by Idle Spans. */

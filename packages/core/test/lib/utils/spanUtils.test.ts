@@ -22,7 +22,9 @@ import type { Span, SpanAttributes, SpanTimeInput, StreamedSpanJSON } from '../.
 import type { SpanStatus } from '../../../src/types/spanStatus';
 import type { OpenTelemetrySdkTraceBaseSpan } from '../../../src/utils/spanUtils';
 import {
+  addChildSpanToSpan,
   getRootSpan,
+  getSpanDescendants,
   spanIsSampled,
   spanTimeInputToSeconds,
   spanToJSON,
@@ -777,6 +779,30 @@ describe('getRootSpan', () => {
         });
       });
     });
+  });
+});
+
+describe('addChildSpanToSpan', () => {
+  it('does not track children on an unsampled span', () => {
+    const parent = new SentrySpan({ name: 'parent', sampled: false });
+    const child = new SentrySpan({ name: 'child', sampled: false });
+
+    addChildSpanToSpan(parent, child);
+
+    expect(getRootSpan(child)).toBe(parent);
+    expect((parent as unknown as { _sentryChildSpans?: Set<Span> })._sentryChildSpans).toBeUndefined();
+  });
+
+  it('stops tracking children once the cap is reached', () => {
+    const parent = new SentrySpan({ name: 'parent', sampled: true });
+
+    const children = Array.from({ length: 1001 }, (_, i) => new SentrySpan({ name: `child-${i}`, sampled: true }));
+    children.forEach(child => addChildSpanToSpan(parent, child));
+
+    // the parent plus the first 1000 children, which is what serialization would keep anyway
+    expect(getSpanDescendants(parent)).toHaveLength(1001);
+    // the child that was not tracked can still find its root span
+    expect(getRootSpan(children[1000]!)).toBe(parent);
   });
 });
 
