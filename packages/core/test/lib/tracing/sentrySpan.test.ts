@@ -240,6 +240,23 @@ describe('SentrySpan', () => {
       expect(childSpansOf(rootSpan!).size).toBe(1);
       expect(getRootSpan(lateChild)).toBe(rootSpan);
     });
+
+    it('stops tracking children on a segment span that has streamed', () => {
+      const client = new TestClient(getDefaultTestClientOptions({ tracesSampleRate: 1, traceLifecycle: 'stream' }));
+      setCurrentClient(client);
+
+      let rootSpan: Span | undefined;
+      startSpan({ name: 'root' }, span => {
+        rootSpan = span;
+        startSpan({ name: 'child' }, () => {});
+      });
+
+      expect(childSpansOf(rootSpan!).size).toBe(1);
+
+      const lateChild = withActiveSpan(rootSpan!, () => startInactiveSpan({ name: 'late child' }));
+      expect(childSpansOf(rootSpan!).size).toBe(1);
+      expect(getRootSpan(lateChild)).toBe(rootSpan);
+    });
   });
 
   describe('end', () => {

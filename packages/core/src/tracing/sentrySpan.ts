@@ -414,6 +414,8 @@ export class SentrySpan implements Span {
 
     if (client && hasSpanStreamingEnabled(client)) {
       client.emit('afterSegmentSpanEnd', this);
+      // Every span streams on its own here, so the tree of a finished segment is never read again.
+      sealChildSpansOnSpan(this);
       return;
     }
 
