@@ -363,8 +363,11 @@ const CHILD_SPANS_FIELD = '_sentryChildSpans';
 const CHILD_SPANS_SEALED_FIELD = '_sentryChildSpansSealed';
 const ROOT_SPAN_FIELD = '_sentryRootSpan';
 
-// Matches the truncation applied when a segment span is serialized (`MAX_SPAN_COUNT` in
-// `sentrySpan.ts`), so the children we refuse to track are ones that would be dropped at send time.
+// Mirrors the truncation applied when a segment span is serialized (`MAX_SPAN_COUNT` in
+// `sentrySpan.ts`): a parent past this many children already has more than it can send, so we stop
+// growing the tree instead of retaining spans for a parent that outlives them. Serialization drops
+// unfinished and already-sent descendants before applying its own limit, so such a transaction can
+// land slightly under that limit rather than exactly at it.
 const MAX_CHILD_SPANS = 1000;
 
 type SpanWithPotentialChildren = Span & {
