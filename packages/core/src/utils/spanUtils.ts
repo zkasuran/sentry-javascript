@@ -408,7 +408,7 @@ export function addChildSpanToSpan(span: SpanWithPotentialChildren, childSpan: S
 
   if (DEBUG_BUILD && rootSpan === span && childSpans.size === UNSENDABLE_CHILD_SPAN_COUNT) {
     debug.warn(
-      `[Tracing] Span "${spanToJSON(span).description}" has ${UNSENDABLE_CHILD_SPAN_COUNT} child spans and has not ended. Further children cannot be sent, and all of them are kept in memory until it ends. This usually means the span is used as a long-lived parent, e.g. one started during startup that is still active in a background task.`,
+      `[Tracing] Span "${spanToJSON(span).description}" has ${UNSENDABLE_CHILD_SPAN_COUNT} child spans and has not ended, so it holds on to all of them and cannot send any more. If it is meant to be long-lived, end it once its work is done, or start the code that creates these children in its own trace with \`Sentry.startNewTrace(() => { ... })\` so they are sent separately.`,
     );
   }
 }
