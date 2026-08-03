@@ -4,7 +4,6 @@ import type { RawAttributes } from '../attributes';
 import { serializeAttributes } from '../attributes';
 import { getMainCarrier } from '../carrier';
 import { getCurrentScope } from '../currentScopes';
-import { DEBUG_BUILD } from '../debug-build';
 import {
   SEMANTIC_ATTRIBUTE_SENTRY_CUSTOM_SPAN_NAME,
   SEMANTIC_ATTRIBUTE_SENTRY_OP,
@@ -31,7 +30,7 @@ import { addNonEnumerableProperty } from '../utils/object';
 import { generateSpanId } from '../utils/propagationContext';
 import { timestampInSeconds } from '../utils/time';
 import { generateSentryTraceHeader, generateTraceparentHeader } from '../utils/tracing';
-import { consoleSandbox, debug } from './debug-logger';
+import { consoleSandbox } from './debug-logger';
 import { _getSpanForScope } from './spanOnScope';
 
 // These are aligned with OpenTelemetry trace flags
@@ -363,11 +362,6 @@ export function addStatusMessageAttribute(
 const CHILD_SPANS_FIELD = '_sentryChildSpans';
 const ROOT_SPAN_FIELD = '_sentryRootSpan';
 
-// The limit a segment span is truncated to when it is serialized (`MAX_SPAN_COUNT` in `sentrySpan.ts`),
-// past which further children can never be sent. Only used to warn, since a segment span this large is
-// one that never ends.
-const UNSENDABLE_CHILD_SPAN_COUNT = 1000;
-
 type SpanWithPotentialChildren = Span & {
   [CHILD_SPANS_FIELD]?: Set<Span>;
   [ROOT_SPAN_FIELD]?: Span;
@@ -398,18 +392,10 @@ export function addChildSpanToSpan(span: SpanWithPotentialChildren, childSpan: S
 
   // We store a list of child spans on the parent span
   // We need this for `getSpanDescendants()` to work
-  const childSpans = span[CHILD_SPANS_FIELD];
-  if (!childSpans) {
+  if (span[CHILD_SPANS_FIELD]) {
+    span[CHILD_SPANS_FIELD].add(childSpan);
+  } else {
     addNonEnumerableProperty(span, CHILD_SPANS_FIELD, new Set([childSpan]));
-    return;
-  }
-
-  childSpans.add(childSpan);
-
-  if (DEBUG_BUILD && rootSpan === span && childSpans.size === UNSENDABLE_CHILD_SPAN_COUNT) {
-    debug.warn(
-      `[Tracing] Span "${spanToJSON(span).description}" has ${UNSENDABLE_CHILD_SPAN_COUNT} child spans and has not ended, so it holds on to all of them and cannot send any more. If your code started this span, end it once its work is done. If your code started the child spans, wrap it in \`Sentry.startNewTrace(() => { ... })\` so they are sent separately. If neither is yours, this is an SDK or framework bug worth reporting.`,
-    );
   }
 }
 
