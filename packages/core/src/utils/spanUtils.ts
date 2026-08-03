@@ -4,6 +4,7 @@ import type { RawAttributes } from '../attributes';
 import { serializeAttributes } from '../attributes';
 import { getMainCarrier } from '../carrier';
 import { getCurrentScope } from '../currentScopes';
+import { DEBUG_BUILD } from '../debug-build';
 import {
   SEMANTIC_ATTRIBUTE_SENTRY_CUSTOM_SPAN_NAME,
   SEMANTIC_ATTRIBUTE_SENTRY_OP,
@@ -30,7 +31,7 @@ import { addNonEnumerableProperty } from '../utils/object';
 import { generateSpanId } from '../utils/propagationContext';
 import { timestampInSeconds } from '../utils/time';
 import { generateSentryTraceHeader, generateTraceparentHeader } from '../utils/tracing';
-import { consoleSandbox } from './debug-logger';
+import { consoleSandbox, debug } from './debug-logger';
 import { _getSpanForScope } from './spanOnScope';
 
 // These are aligned with OpenTelemetry trace flags
@@ -360,19 +361,15 @@ export function addStatusMessageAttribute(
 }
 
 const CHILD_SPANS_FIELD = '_sentryChildSpans';
-const CHILD_SPANS_SEALED_FIELD = '_sentryChildSpansSealed';
 const ROOT_SPAN_FIELD = '_sentryRootSpan';
 
-// Mirrors the truncation applied when a segment span is serialized (`MAX_SPAN_COUNT` in
-// `sentrySpan.ts`): a parent past this many children already has more than it can send, so we stop
-// growing the tree instead of retaining spans for a parent that outlives them. Serialization drops
-// unfinished and already-sent descendants before applying its own limit, so such a transaction can
-// land slightly under that limit rather than exactly at it.
-const MAX_CHILD_SPANS = 1000;
+// The limit a segment span is truncated to when it is serialized (`MAX_SPAN_COUNT` in `sentrySpan.ts`),
+// past which further children can never be sent. Only used to warn, since a segment span this large is
+// one that never ends.
+const UNSENDABLE_CHILD_SPAN_COUNT = 1000;
 
 type SpanWithPotentialChildren = Span & {
   [CHILD_SPANS_FIELD]?: Set<Span>;
-  [CHILD_SPANS_SEALED_FIELD]?: boolean;
   [ROOT_SPAN_FIELD]?: Span;
 };
 
@@ -385,11 +382,17 @@ export function addChildSpanToSpan(span: SpanWithPotentialChildren, childSpan: S
   const rootSpan = span[ROOT_SPAN_FIELD] || span;
   addNonEnumerableProperty(childSpan, ROOT_SPAN_FIELD, rootSpan);
 
-  // `getSpanDescendants()` stops at an unsampled span, and a sealed span has already had its tree read
-  // for the last time, so a child added here could never show up in a transaction. Skipping it keeps a
-  // span that outlives its children (e.g. a framework boot span still active in a queue consumer's
-  // async context) from pinning every later child for the rest of the process.
-  if (!spanIsSampled(span) || span[CHILD_SPANS_SEALED_FIELD]) {
+  // `getSpanDescendants()` stops at an unsampled span, so a child of one could never show up in a
+  // transaction anyway.
+  if (!spanIsSampled(span)) {
+    return;
+  }
+
+  // A segment span that stopped recording has had its tree read for the last time, and a child starting
+  // now belongs to whatever segment comes next: it is re-emitted on its own instead. Tracking it here
+  // would pin it for as long as the parent lives, which for a segment span left active in an async
+  // context (e.g. a framework boot span captured by a queue consumer) is the rest of the process.
+  if (rootSpan === span && !span.isRecording()) {
     return;
   }
 
@@ -398,19 +401,16 @@ export function addChildSpanToSpan(span: SpanWithPotentialChildren, childSpan: S
   const childSpans = span[CHILD_SPANS_FIELD];
   if (!childSpans) {
     addNonEnumerableProperty(span, CHILD_SPANS_FIELD, new Set([childSpan]));
-  } else if (childSpans.size < MAX_CHILD_SPANS) {
-    childSpans.add(childSpan);
+    return;
   }
-}
 
-/**
- * Stops tracking further children on a span once its tree has been read for the last time. The children
- * it already has are kept, so the tree stays what was sent. A child that starts afterwards is still
- * reachable through its own root span reference, which is what re-emitting it as an orphan transaction
- * relies on.
- */
-export function sealChildSpansOnSpan(span: SpanWithPotentialChildren): void {
-  addNonEnumerableProperty(span, CHILD_SPANS_SEALED_FIELD, true);
+  childSpans.add(childSpan);
+
+  if (DEBUG_BUILD && rootSpan === span && childSpans.size === UNSENDABLE_CHILD_SPAN_COUNT) {
+    debug.warn(
+      `[Tracing] Span "${spanToJSON(span).description}" has ${UNSENDABLE_CHILD_SPAN_COUNT} child spans and has not ended. Further children cannot be sent, and all of them are kept in memory until it ends. This usually means the span is used as a long-lived parent, e.g. one started during startup that is still active in a background task.`,
+    );
+  }
 }
 
 /** This is only used internally by Idle Spans. */

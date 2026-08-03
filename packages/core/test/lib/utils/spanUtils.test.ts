@@ -793,16 +793,29 @@ describe('addChildSpanToSpan', () => {
     expect((parent as unknown as { _sentryChildSpans?: Set<Span> })._sentryChildSpans).toBeUndefined();
   });
 
-  it('stops tracking children once the cap is reached', () => {
+  it('does not track children on a segment span that stopped recording', () => {
     const parent = new SentrySpan({ name: 'parent', sampled: true });
+    parent.end();
 
-    const children = Array.from({ length: 1001 }, (_, i) => new SentrySpan({ name: `child-${i}`, sampled: true }));
-    children.forEach(child => addChildSpanToSpan(parent, child));
+    const child = new SentrySpan({ name: 'child', sampled: true });
+    addChildSpanToSpan(parent, child);
 
-    // the parent plus the first 1000 children, which is what serialization would keep anyway
-    expect(getSpanDescendants(parent)).toHaveLength(1001);
     // the child that was not tracked can still find its root span
-    expect(getRootSpan(children[1000]!)).toBe(parent);
+    expect(getRootSpan(child)).toBe(parent);
+    expect(getSpanDescendants(parent)).toEqual([parent]);
+  });
+
+  it('keeps tracking children on a span that stopped recording but is not the segment span', () => {
+    const segment = new SentrySpan({ name: 'segment', sampled: true });
+    const parent = new SentrySpan({ name: 'parent', sampled: true });
+    addChildSpanToSpan(segment, parent);
+    parent.end();
+
+    const child = new SentrySpan({ name: 'child', sampled: true });
+    addChildSpanToSpan(parent, child);
+
+    // the segment span is still open, so its transaction has not been assembled yet
+    expect(getSpanDescendants(segment)).toEqual([segment, parent, child]);
   });
 });
 
