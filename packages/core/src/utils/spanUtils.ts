@@ -376,8 +376,9 @@ export function addChildSpanToSpan(span: SpanWithPotentialChildren, childSpan: S
   const rootSpan = span[ROOT_SPAN_FIELD] || span;
   addNonEnumerableProperty(childSpan, ROOT_SPAN_FIELD, rootSpan);
 
-  // `getSpanDescendants()` stops at an unsampled span, so a child of one could never show up in a
-  // transaction anyway.
+  // `_sentryChildSpans` exists only so `getSpanDescendants()` can walk the tree when the segment span
+  // is sent, and that walk stops at an unsampled span without ever visiting its children. So a child
+  // tracked here would be held for the parent's lifetime and never read.
   if (!spanIsSampled(span)) {
     return;
   }
